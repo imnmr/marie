@@ -35,10 +35,11 @@ typedef struct String {
 #define SS(s, from, to) (String){(to) - (from), &((s).data[from])}
 #define SZ(s, from) SS((s), (from), (s).len)
 
-bool is_space(u8 c);
-bool is_alpha(u8 c);
-bool is_numeric(u8 c);
-bool is_alnum(u8 c);
+bool is_space    (u8 c);
+bool is_alpha    (u8 c);
+bool is_digit    (u8 c);
+bool is_alnum    (u8 c);
+bool is_hex_digit(u8 c);
 
 String string_clone     (String s);
 void   string_free      (String* s);
@@ -51,6 +52,12 @@ isize  string_index_byte(String s, u8 b);
 String string_trim_space(String s);
 String string_to_upper  (String s);
 
+u64 strconv_from_uint(String s, isize base, isize* n);
+
+//
+// Implementation
+//
+
 bool is_space(u8 c) {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
@@ -59,12 +66,16 @@ bool is_alpha(u8 c) {
 	return ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z');
 }
 
-bool is_numeric(u8 c) {
-	return ('0' <= c && c <= '9');
+bool is_digit(u8 c) {
+	return '0' <= c && c <= '9';
 }
 
 bool is_alnum(u8 c) {
-	return is_alpha(c) || is_numeric(c);
+	return is_alpha(c) || is_digit(c);
+}
+
+bool is_hex_digit(u8 c) {
+	return is_digit(c) || ('a' <= c || c <= 'f') || ('A' <= c || c <= 'F');
 }
 
 String string_clone(String s) {
@@ -141,4 +152,25 @@ String string_to_upper(String s) {
 			t.data[i] -= 0x20;
 	}
 	return t;
+}
+
+u64 strconv_from_uint(String s, isize base, isize* n) {
+	u64 r = 0;
+	for (isize i = 0; i < s.len; ++i) {
+		u8 c = s.data[i];
+		if ('a' <= c && c <= 'z')
+			c = c - 'a' + 10;
+		else if ('A' <= c && c <= 'Z')
+			c = c - 'A' + 10;
+		else
+			c -= '0';
+
+		if (c < 0 || base - 1 < c) {
+			*n = i;
+			break;
+		}
+
+		r = r * base + c;
+	}
+	return r;
 }

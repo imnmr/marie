@@ -4,34 +4,35 @@
 #define OPCODES_COUNT 13
 
 #define X_OPCODES \
-	X_OPCODE(LOAD, 0x1, true)     \
-	X_OPCODE(STORE, 0x2, true)    \
-	X_OPCODE(ADD, 0x3, true)      \
-	X_OPCODE(SUBT, 0x4, true)     \
-	X_OPCODE(INPUT, 0x5, false)   \
-	X_OPCODE(OUTPUT, 0x6, false)  \
-	X_OPCODE(HALT, 0x7, false)    \
-	X_OPCODE(SKIPCOND, 0x8, true) \
-	X_OPCODE(JUMP, 0x9, true)     \
-	X_OPCODE(JNS, 0x0, true)      \
-	X_OPCODE(CLEAR, 0xA, false)   \
-	X_OPCODE(ADDI, 0xB, true)     \
-	X_OPCODE(JUMPI, 0xC, true)    \
+	X_OPCODE(OPCODE_LOAD,     "LOAD",     0x1, true)  \
+	X_OPCODE(OPCODE_STORE,    "STORE",    0x2, true)  \
+	X_OPCODE(OPCODE_ADD,      "ADD",      0x3, true)  \
+	X_OPCODE(OPCODE_SUBT,     "SUBT",     0x4, true)  \
+	X_OPCODE(OPCODE_INPUT,    "INPUT",    0x5, false) \
+	X_OPCODE(OPCODE_OUTPUT,   "OUTPUT",   0x6, false) \
+	X_OPCODE(OPCODE_HALT,     "HALT",     0x7, false) \
+	X_OPCODE(OPCODE_SKIPCOND, "SKIPCOND", 0x8, true)  \
+	X_OPCODE(OPCODE_JUMP,     "JUMP",     0x9, true)  \
+	X_OPCODE(OPCODE_JNS,      "JNS",      0x0, true)  \
+	X_OPCODE(OPCODE_CLEAR,    "CLEAR",    0xA, false) \
+	X_OPCODE(OPCODE_ADDI,     "ADDI",     0xB, true)  \
+	X_OPCODE(OPCODE_JUMPI,    "JUMPI",    0xC, true)  \
 
 typedef enum Opcode {
-#define X_OPCODE(name, value, _) OPCODE_##name = value,
+	OPCODE_INVALID = -1,
+#define X_OPCODE(e, _1, value, _2) e = value,
 	X_OPCODES
 #undef X_OPCODE
 } Opcode;
 
 char const* opcode_names[] = {
-#define X_OPCODE(name, _1, _2) [OPCODE_##name] = #name,
+#define X_OPCODE(e, name, _1, _2) [e] = name,
 	X_OPCODES
 #undef X_OPCODE
 };
 
 bool opcode_unary[] = {
-#define X_OPCODE(name, _1, unary) [OPCODE_##name] = unary,
+#define X_OPCODE(e, _1, _2, unary) [e] = unary,
 	X_OPCODES
 #undef X_OPCODE
 };
@@ -39,110 +40,222 @@ bool opcode_unary[] = {
 // TODO: Use a lookup table.
 Opcode opcode_from_string(String s) {
 	if (s.len < 3 || 8 < s.len)
-		return -1;
+		return OPCODE_INVALID;
 
-	if      (string_equal(s, S("LOAD")))     return 0x1;
-	else if (string_equal(s, S("STORE")))    return 0x2;
-	else if (string_equal(s, S("ADD")))      return 0x3;
-	else if (string_equal(s, S("SUBT")))     return 0x4;
-	else if (string_equal(s, S("INPUT")))    return 0x5;
-	else if (string_equal(s, S("OUTPUT")))   return 0x6;
-	else if (string_equal(s, S("HALT")))     return 0x7;
-	else if (string_equal(s, S("SKIPCOND"))) return 0x8;
-	else if (string_equal(s, S("JUMP")))     return 0x9;
-	else if (string_equal(s, S("JNS")))      return 0x0;
-	else if (string_equal(s, S("CLEAR")))    return 0xA;
-	else if (string_equal(s, S("ADDI")))     return 0xB;
-	else if (string_equal(s, S("JUMPI")))    return 0xC;
+	if (false) /* noop */;
+#define X_OPCODE(e, name, _1, _2) else if (string_equal(s, S(name))) return e;
+	X_OPCODES
+#undef X_OPCODE
 
-	return -1;
+	return OPCODE_INVALID;
 }
 
 typedef enum SkipCondOperand {
 	SKIPCOND_LT = 0x000,
 	SKIPCOND_EQ = 0x400,
 	SKIPCOND_GT = 0x800,
-} SkipCond_Operand;
+} SkipCondOperand;
 
-typedef struct Instruction {
-	Opcode opcode;
-	u16    operand;
-} Instruction;
+#define X_DIRECTIVES \
+	X_DIRECTIVE(DIRECTIVE_ORG, "ORG") \
+	X_DIRECTIVE(DIRECTIVE_DEC, "DEC") \
+	X_DIRECTIVE(DIRECTIVE_HEX, "HEX")
 
-typedef struct Parser {
+typedef enum Directive {
+	DIRECTIVE_INVALID,
+#define X_DIRECTIVE(e, _) e,
+	X_DIRECTIVES
+#undef X_DIRECTIVE
+} Directive;
+
+char const* directive_names[] = {
+#define X_DIRECTIVE(e, name) [e] = name,
+	X_DIRECTIVES
+#undef X_DIRECTIVE
+};
+
+Directive directive_from_string(String s) {
+	if (s.len != 3)
+		return DIRECTIVE_INVALID;
+
+	if (false) /* no-op */;
+#define X_DIRECTIVE(e, name) else if (string_equal(s, S(#name))) return e;
+	X_DIRECTIVES
+#undef X_DIRECTIVES
+
+	return DIRECTIVE_INVALID;
+}
+
+#define X_TOKENS \
+	X_TOKEN(EOF)       \
+	X_TOKEN(INVALID)   \
+	X_TOKEN(OPCODE)    \
+	X_TOKEN(DIRECTIVE) \
+	X_TOKEN(IDENT)     \
+	X_TOKEN(NUMBER)    \
+	X_TOKEN(COMMA)     \
+
+typedef enum TokenKind {
+#define X_TOKEN(name) TOKEN_##name,
+	X_TOKENS
+#undef X_TOKEN
+} TokenKind;
+
+char const* token_names[] = {
+#define X_TOKEN(name) [TOKEN_##name] = #name,
+	X_TOKENS
+#undef X_TOKEN
+};
+
+typedef struct Token {
+	TokenKind kind;
+	isize     off;
+	isize     len;
+	isize     line;
+	isize     line_off;
+} Token;
+
+typedef struct Tokenizer {
 	String src;
 	isize  cursor;
 	isize  line;
+	isize  line_off;
 
-	u16 program_addr;
+	isize  tokens_len;
+	isize  tokens_cap;
+	Token* tokens; 
+} Tokenizer;
 
-	isize   sym_len;
-	isize   sym_cap;
-	u32*    sym_hashes;
-	String* sym_names;
-	u16*    sym_addrs;
-
-	isize        inst_len;
-	isize        inst_cap;
-	Instruction* inst;
-} Parser;
-
-void parser_init(Parser* pr, String src) {
-	pr->src = src;
-	pr->cursor = 0;
-	pr->line = 1;
-
-	// TODO: Handle ORG directive.
-	pr->program_addr = 0;
-
-	pr->sym_len = 0;
-	pr->sym_cap = 8;
-	// TODO: Implement symbol maps.
-	// pr->sym_hashes;
-	// pr->sym_names;
-	// pr->sym_addrs;
-
-	pr->inst_len = 0;
-	pr->inst_cap = 8;
-	pr->inst = malloc(pr->inst_cap * sizeof(*pr->inst));
+void tokenizer_init(Tokenizer *tz, String src) {
+	tz->src = src;
+	tz->cursor = 0;
+	tz->line = 1;
+	tz->line_off = 1;
+	tz->tokens_len = 0;
+	tz->tokens_cap = 8;
+	tz->tokens = malloc(tz->tokens_cap * sizeof(*tz->tokens));
 }
 
-void parser_free(Parser* pr) {
-	free(pr->inst);
+void tokenizer_free(Tokenizer* tz) {
+	free(tz->tokens);
 }
 
-void parser_append_inst(Parser* pr, Instruction inst) {
-	if (pr->inst_len < pr->inst_cap) {
-		isize new_cap = pr->inst_cap;
-		while (new_cap < pr->inst_len)
-			new_cap *= 2;
-		pr->inst_cap = new_cap;
-		pr->inst = realloc(pr->inst, pr->inst_cap * sizeof(*pr->inst));
-		assert(pr->inst != NULL);
+void tokenizer_append(Tokenizer* tz, TokenKind kind, isize off, isize len) {
+	tz->tokens_len += 1;
+
+	isize new_cap = tz->tokens_cap;
+	while (new_cap < tz->tokens_len)
+		new_cap *= 2;
+
+	if (new_cap != tz->tokens_cap) {
+		tz->tokens_cap = new_cap;
+		tz->tokens = realloc(tz->tokens, tz->tokens_cap * sizeof(*tz->tokens));
+		assert(tz->tokens != NULL);
 	}
 
-	pr->inst[pr->inst_len] = inst;
-	pr->inst_len += 1;
+	Token t;
+	t.kind = kind;
+	t.off = off;
+	t.len = len;
+	t.line = tz->line;
+	t.line_off = tz->line_off;
+
+	tz->tokens[tz->tokens_len - 1] = t;
 }
 
-u64 parse_uint_base16(String s, isize* n) {
-	u64 r = 0;
-	for (isize i = 0; i < s.len; ++i) {
-		u8 c = s.data[i];
-		if ('a' <= c && c <= 'f')
-			c -= 32;
-		if ('A' <= c && c <= 'F')
-			c -= 7;
-		c -= '0';
+bool tokenizer_eof(Tokenizer const* tz) {
+	return tz->cursor >= tz->src.len;
+}
 
-		if (c < 0 || 15 < c) {
-			*n = i;
-			break;
+u8 tokenizer_curr(Tokenizer const* tz) {
+	if (tokenizer_eof(tz))
+		return 0;
+	return tz->src.data[tz->cursor];
+}
+
+void tokenizer_consume(Tokenizer* tz) {
+	tz->cursor += 1;
+}
+
+void tokenizer_advance(Tokenizer* tz) {
+	u8 c = tokenizer_curr(tz);
+	while (is_space(c) || c == '/') {
+		if (c == '\n') {
+			tz->line += 1;
+			tz->line_off = tz->cursor + 1;
+		} else if (c == '/') {
+			while (c != '\n' && !tokenizer_eof(tz)) {
+				tokenizer_consume(tz);
+				c = tokenizer_curr(tz);
+			}
+			continue;
 		}
 
-		r = (r * 16) + c;
+		tokenizer_consume(tz);
+		c = tokenizer_curr(tz);
 	}
-	return r;
+}
+
+bool tokenizer_next(Tokenizer* tz) {
+	tokenizer_advance(tz);
+
+	if (tokenizer_eof(tz))
+		return false;
+
+	u8 c = tokenizer_curr(tz);
+	isize start = tz->cursor;
+
+	if (c == ',') {
+		tokenizer_consume(tz);
+		tokenizer_append(tz, TOKEN_COMMA, start, 1);
+		return true;
+	}
+
+	while (is_alnum(c)) {
+		tokenizer_consume(tz);
+		c = tokenizer_curr(tz);
+	}
+
+	if (tz->cursor == start) {
+		tokenizer_consume(tz);
+		tokenizer_append(tz, TOKEN_INVALID, start, 1);
+		return true;
+	}
+
+	String s = string_to_upper(SS(tz->src, start, tz->cursor));
+
+	Opcode opcode = opcode_from_string(s);
+	if (opcode != OPCODE_INVALID) {
+		tokenizer_append(tz, TOKEN_OPCODE, start, s.len);
+		string_free(&s);
+		return true;
+	}
+
+	Directive dire = directive_from_string(s);
+	if (dire != DIRECTIVE_INVALID) {
+		tokenizer_append(tz, TOKEN_DIRECTIVE, start, s.len);
+		string_free(&s);
+		return true;
+	}
+
+	if (s.len > 0 && is_digit(s.data[0])) {
+		isize i = 1;
+		while (i < s.len && is_hex_digit(s.data[i]))
+			i += 1;
+		if (i == s.len) {
+			tokenizer_append(tz, TOKEN_NUMBER, start, s.len);
+			string_free(&s);
+			return true;
+		}
+		tokenizer_append(tz, TOKEN_INVALID, start, s.len);
+		string_free(&s);
+		return false;
+	}
+
+	tokenizer_append(tz, TOKEN_IDENT, start, s.len);
+	string_free(&s);
+
+	return true;
 }
 
 int main(int argc, char** argv) {
@@ -174,76 +287,20 @@ int main(int argc, char** argv) {
 			fclose(file);
 	}
 
-	Parser parser;
-	parser_init(&parser, input);
+	Tokenizer tz;
+	tokenizer_init(&tz, input);
 
-	while (parser.cursor < parser.src.len) {
-		String line = SZ(parser.src, parser.cursor);
-		isize delim = string_index_byte(line, '\n');
-		if (delim >= 0)
-			line = SS(line, 0, delim);
+	while (tokenizer_next(&tz))
+		/* no-op */;
 
-		isize cdelim = string_index_byte(line, '/');
-		if (cdelim >= 0)
-			line = SS(line, 0, cdelim);
-
-		line = string_trim_space(line);
-
-		isize ldelim = string_index_byte(line, ',');
-		if (ldelim == 0) {
-			// TODO: Label name must preceed ','.
-		} else if (ldelim >= 0) {
-			// TODO: Handle labels.
-
-			line = SZ(line, ldelim + 1);
-			line = string_trim_space(line);
-		}
-
-		isize end = 0;
-		while (is_alpha(line.data[end]))
-			end += 1;
-
-		// TODO: Don't do this.
-		String opcode_arg = string_to_upper(SS(line, 0, end));
-		Opcode opcode = opcode_from_string(opcode_arg);
-		string_free(&opcode_arg);
-
-		if (opcode == -1) {
-			// TODO: Invalid opcode, try directive.
-		} else {
-			Instruction inst;
-			inst.opcode = opcode;
-
-			if (opcode_unary[opcode]) {
-				line = SZ(line, end);
-				line = string_trim_space(line);
-
-				isize n = -1;
-				u64 val = parse_uint_base16(line, &n);
-				if (n >= 0) {
-					// TODO: Invalid number, try label.
-				} else if (val >= MEMORY_SIZE) {
-					// TODO: Address out of bounds.
-				} else {
-					inst.operand = (u16)val;
-				}
-			}
-
-			parser_append_inst(&parser, inst);
-		}
-
-		parser.line += 1;
-		parser.cursor += delim + 1;
+	printf("Tokens: %td\n", tz.tokens_len);
+	for (isize i = 0; i < tz.tokens_len; ++i) {
+		Token t = tz.tokens[i];
+		printf("[%td]: %s '%.*s'\n", i, token_names[t.kind],
+		       (int)t.len, &tz.src.data[t.off]);
 	}
 
-	for (isize i = 0; i < parser.inst_len; ++i) {
-		Instruction inst = parser.inst[i];
-		if (opcode_unary[inst.opcode])
-			printf("%s %03X\n", opcode_names[inst.opcode], inst.operand);
-		else
-			printf("%s\n", opcode_names[inst.opcode]);
-	}
-
+	tokenizer_free(&tz);
 	string_free(&input);
 
 	return 0;
