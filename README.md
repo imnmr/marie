@@ -6,10 +6,10 @@ Architecture_ (2003) by Linda Null and Julia Lobur.
 
 ## Building
 
-You need a C11 compiler to build this project. Get the source code of this
+You need a C99 compiler to build this project. Get the source code of this
 repository and run the following:
 
-    cc -std=c11 -O2 -o marie main.c
+    cc -std=c99 -O2 -o marie main.c
 
 ## License
 
