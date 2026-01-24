@@ -1,3 +1,7 @@
+//
+// General utilities
+//
+
 #include <assert.h>
 #include <errno.h>
 #include <stdarg.h>
@@ -58,6 +62,7 @@ String string_trim_space(String s);
 String string_to_upper  (String s);
 
 u64 strconv_from_uint(String s, isize base, isize* n);
+i64 strconv_from_int(String s, isize base, isize* n);
 
 bool is_space(u8 c) {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -80,9 +85,7 @@ bool is_hex_digit(u8 c) {
 }
 
 String string_make(isize n) {
-	String dst;
-	dst.len = n;
-	dst.data = malloc(n * sizeof(*dst.data));
+	String dst = {n, malloc(n * sizeof(*dst.data))};
 	return dst;
 }
 
@@ -182,6 +185,17 @@ u64 strconv_from_uint(String s, isize base, isize* n) {
 	return r;
 }
 
+i64 strconv_from_int(String s, isize base, isize* n) {
+	i64 r = 0;
+	i64 i = 0;
+
+	if (s.data[0] == '-')
+		i = 1;
+
+	r = strconv_from_uint(SZ(s, i), base, n);
+	return i == 0 ? r : -r;
+}
+
 #define DYNAMIC_ARRAY(T, name) \
 	typedef struct name {  \
 		isize len;     \
@@ -213,20 +227,9 @@ u64 strconv_from_uint(String s, isize base, isize* n) {
 		(a)->len += 1;                                             \
 	} while (0)
 
-// MARIE's grammar
 //
-// program     = *(statement LF) EOF
-// statement   = [label ","] WSP operation [WSP operand]
-// operation   = opcode | directive
-// operand     = address | label
-// address     = ("0" A-F | DIGIT) HEXDIGIT
-// label       = ALPHA *(ALPHA | DIGIT)
+// MARIE
 //
-// ALPHA       = a-z | A-Z
-// DIGIT       = 0-9
-// HEXDIGIT    = a-f | A-F | 0-9
-// LF          = %x0a             ; line feed
-// WSP         = %x20 | %x09      ; space and horizontal tab
 
 #define MEMORY_SIZE 4096
 
@@ -314,14 +317,15 @@ Directive directive_from_string(String s) {
 }
 
 #define X_TOKENS \
-	X_TOKEN(TOKEN_EOF,       "EOF")       \
-	X_TOKEN(TOKEN_INVALID,   "INVALID")   \
-	X_TOKEN(TOKEN_OPCODE,    "OPCODE")    \
-	X_TOKEN(TOKEN_DIRECTIVE, "DIRECTIVE") \
-	X_TOKEN(TOKEN_IDENT,     "IDENT")     \
-	X_TOKEN(TOKEN_NUMBER,    "NUMBER")    \
-	X_TOKEN(TOKEN_COMMA,     "COMMA")     \
-	X_TOKEN(TOKEN_NEWLINE,   "NEWLINE")   \
+	X_TOKEN(TOKEN_EOF,       "EOF")        \
+	X_TOKEN(TOKEN_INVALID,   "INVALID")    \
+	X_TOKEN(TOKEN_OPCODE,    "OPCODE")     \
+	X_TOKEN(TOKEN_DIRECTIVE, "DIRECTIVE")  \
+	X_TOKEN(TOKEN_IDENT,     "IDENTIFIER") \
+	X_TOKEN(TOKEN_NUMBER,    "NUMBER")     \
+	X_TOKEN(TOKEN_COMMA,     "COMMA")      \
+	X_TOKEN(TOKEN_NEWLINE,   "NEWLINE")    \
+	X_TOKEN(TOKEN_COMMENT,   "COMMENT")    \
 
 typedef enum TokenKind {
 #define X_TOKEN(e, _) e,
@@ -354,13 +358,13 @@ typedef struct Tokenizer {
 	TokenList tokens;
 } Tokenizer;
 
-void tokenizer_init(Tokenizer *tz, String src) {
+void tokenizer_init(Tokenizer* tz, String src) {
 	tz->src = src;
 	tz->cursor = 0;
 	tz->line = 1;
 	tz->line_off = 0;
 
-	da_init_cap(&tz->tokens, 32);
+	da_init_cap(&tz->tokens, 64);
 }
 
 void tokenizer_free(Tokenizer* tz) {
@@ -406,10 +410,12 @@ void tokenizer_advance(Tokenizer* tz) {
 			tz->line += 1;
 			tz->line_off = tz->cursor + 1;
 		} else if (c == '/') {
+			isize start = tz->cursor;
 			while (c != '\n' && !tokenizer_eof(tz)) {
 				tokenizer_consume(tz);
 				c = tokenizer_curr(tz);
 			}
+			tokenizer_append(tz, TOKEN_COMMENT, start, tz->cursor - start + 1);
 			continue;
 		}
 
@@ -419,7 +425,7 @@ void tokenizer_advance(Tokenizer* tz) {
 }
 
 bool is_valid_ident(u8 c) {
-	return is_alnum(c) || c == '_';
+	return !is_space(c) && c != ',' && c != '/';
 }
 
 bool tokenizer_next(Tokenizer* tz) {
@@ -469,14 +475,16 @@ bool tokenizer_next(Tokenizer* tz) {
 
 	string_free(&s_upper);
 
-	if (s.len > 0 && is_digit(s.data[0])) {
+	if (s.len > 0 && (s.data[0] == '-' || is_digit(s.data[0]))) {
 		isize i = 1;
 		while (i < s.len && is_hex_digit(s.data[i]))
 			i += 1;
+
 		if (i == s.len) {
 			tokenizer_append(tz, TOKEN_NUMBER, start, s.len);
 			return true;
 		}
+
 		tokenizer_append(tz, TOKEN_INVALID, start, s.len);
 		return false;
 	}
@@ -486,19 +494,10 @@ bool tokenizer_next(Tokenizer* tz) {
 	return true;
 }
 
-typedef struct Inst {
-	Opcode opcode;
-	u16    operand;
-} Inst;
-
-DYNAMIC_ARRAY(Inst, InstList);
-
 typedef struct ParserMapEntry {
-	String    label;
-	u16       addr;  // memory address of the label
-	u16       value; // value of this label, ignored for TOKEN_OPCODE
-	TokenKind kind;  // either TOKEN_OPCODE or TOKEN_DIRECTIVE
-	Token     decl;  // where this label was first declared in the source
+	String label;
+	i16    addr;  // memory address of the label
+	Token  decl;  // where this label was first declared in the source
 } ParserMapEntry;
 
 typedef struct Parser {
@@ -509,18 +508,18 @@ typedef struct Parser {
 	bool has_errors;
 
 	isize cursor;
-	u16   start_addr;
-	u16   curr_addr;
+	i16   start_addr;
+	i16   curr_addr;
 
 	isize           map_len;
 	isize           map_cap;
 	u32*            map_hashes;
 	ParserMapEntry* map_entries;
 
-	InstList insts;
+	i16* memory;
 } Parser;
 
-void parser_init(Parser* p, String src, String src_name, TokenList tokens) {
+void parser_init(Parser* p, String src, String src_name, TokenList tokens, i16* memory) {
 	p->src = src;
 	p->src_name = src_name;
 	p->tokens = tokens;
@@ -540,12 +539,11 @@ void parser_init(Parser* p, String src, String src_name, TokenList tokens) {
 	p->map_hashes = cast(u32*, map_mem);
 	p->map_entries = cast(ParserMapEntry*, &p->map_hashes[p->map_cap]);
 
-	da_init_cap(&p->insts, 32);
+	p->memory = memory;
 }
 
 void parser_free(Parser* p) {
 	free(p->map_hashes);
-	da_free(&p->insts);
 }
 
 u32 hash_fnv1a32(isize n, u8 const* data) {
@@ -578,7 +576,7 @@ ParserMapEntry const* parser_map_get(Parser* p, String label) {
 	return NULL;
 }
 
-void parser_map_put(Parser* p, String label, u16 addr, u16 value, TokenKind kind, Token decl) {
+void parser_map_put(Parser* p, String label, i16 addr, Token decl) {
 	if (cast(f32, p->map_len + 1) / p->map_cap > 0.75) {
 		isize new_cap = p->map_cap;
 		while (cast(f32, p->map_len + 1) / new_cap > 0.75)
@@ -619,8 +617,6 @@ void parser_map_put(Parser* p, String label, u16 addr, u16 value, TokenKind kind
 	p->map_hashes[i] = hash;
 	p->map_entries[i].label = label;
 	p->map_entries[i].addr = addr;
-	p->map_entries[i].value = value;
-	p->map_entries[i].kind = kind;
 	p->map_entries[i].decl = decl;
 	p->map_len += 1;
 }
@@ -653,9 +649,9 @@ void parser_skip_statement(Parser* p) {
 	}
 }
 
-void parser_skip_newlines(Parser* p) {
+void parser_skip(Parser* p) {
 	Token t = parser_curr(p);
-	while (t.kind == TOKEN_NEWLINE) {
+	while (t.kind == TOKEN_NEWLINE || t.kind == TOKEN_COMMENT) {
 		parser_consume(p);
 		t = parser_curr(p);
 	}
@@ -697,56 +693,85 @@ bool parser_msg(Parser* p, Token t, bool error, char const* fmt, ...) {
 	return true;
 }
 
+bool parser_scan_directive(Parser* p) {
+	Token t = parser_curr(p);
+	Directive dire = t.data;
+	if (dire == DIRECTIVE_ORG && p->curr_addr != p->start_addr)
+		return !parser_msg(p, t, true, "error: ORG can only be at the first line");
+
+	parser_consume(p); // directive
+
+	Token u = parser_curr(p);
+	if (u.kind != TOKEN_NUMBER)
+		return !parser_msg(p, u, true, "error: expected a number after directive");
+
+	isize base = 16;
+	isize min = 0;
+	isize max = DIRECTIVE_HEX ? 0xFFFF : 0xFFF;
+
+	if (dire == DIRECTIVE_DEC) {
+		base = 10;
+		min = -32768;
+		max = 32767;
+	}
+
+	i64 value = strconv_from_int(SS(p->src, u.off, u.off + u.len), base, NULL);
+	if (value < min || max < value) {
+		if (dire == DIRECTIVE_DEC)
+			return !parser_msg(p, u, true, "error: value must be within %td and %td", min, max);
+		else
+			return !parser_msg(p, u, true, "error: value must be within %tX and %tX", min, max);
+	}
+
+	if (dire == DIRECTIVE_ORG) {
+		p->start_addr = value;
+		p->curr_addr = p->start_addr - 1;
+	}
+
+	parser_consume(p); // addr
+
+	return true;
+}
+
+bool parser_scan_opcode(Parser* p) {
+	Token t = parser_curr(p);
+	Opcode opcode = t.data;
+
+	parser_consume(p); // opcode
+
+	if (opcode_binary[opcode]) {
+		Token u = parser_curr(p);
+		if (u.kind == TOKEN_IDENT) {
+			// no-op
+		} else if (u.kind == TOKEN_NUMBER) {
+			u64 value = strconv_from_uint(SS(p->src, u.off, u.off + u.len), 16, NULL);
+			if (opcode == OPCODE_SKIPCOND && value != SKIPCOND_LT && value != SKIPCOND_EQ && value != SKIPCOND_GT)
+				return !parser_msg(p, u, true, "error: only 000, 400, and 800 are valid operands for SKIPCOND");
+			else if (value >= MEMORY_SIZE)
+				return !parser_msg(p, u, true, "error: address out of memory bounds");
+		} else {
+			return parser_msg(p, u, true, "error: expected number or label");
+		}
+
+		parser_consume(p); // operand
+	}
+
+	return true;
+}
+
 bool parser_scan_next(Parser* p) {
-	parser_skip_newlines(p);
+	parser_skip(p);
 	if (parser_eof(p))
 		return false;
 
 	Token t = parser_curr(p);
 
 	if (t.kind == TOKEN_DIRECTIVE) {
-		Directive dire = t.data;
-		if (dire == DIRECTIVE_ORG) {
-			if (p->curr_addr != p->start_addr)
-				return parser_msg(p, t, true, "error: ORG can only be at the first line");
-
-			parser_consume(p); // directive
-
-			Token u = parser_curr(p);
-			if (u.kind != TOKEN_NUMBER)
-				return parser_msg(p, u, true, "error: ORG must be followed by an address");
-
-			u64 addr = strconv_from_uint(SS(p->src, u.off, u.off + u.len), 16, NULL);
-			if (addr >= MEMORY_SIZE)
-				return parser_msg(p, u, true, "error: address out of memory bounds");
-
-			p->start_addr = addr;
-			p->curr_addr = p->start_addr - 1;
-
-			parser_consume(p); // addr
-		} else {
-			return parser_msg(p, t, true, "error: unexpected directive (did you mean to use ORG?)");
-		}
+		if (!parser_scan_directive(p))
+			return true;
 	} else if (t.kind == TOKEN_OPCODE) {
-		Opcode opcode = t.data;
-		if (opcode_binary[opcode]) {
-			parser_consume(p); // opcode
-
-			Token u = parser_curr(p);
-			if (u.kind == TOKEN_IDENT) {
-				parser_consume(p); // ident
-			} else if (u.kind == TOKEN_NUMBER) {
-				parser_consume(p); // number
-
-				u64 addr = strconv_from_uint(SS(p->src, u.off, u.off + u.len), 16, NULL);
-				if (addr >= MEMORY_SIZE)
-					return parser_msg(p, u, true, "error: address out of memory bounds");
-			} else {
-				return parser_msg(p, u, true, "error: expected address or label as operand");
-			}
-		} else {
-			parser_consume(p); // opcode
-		}
+		if (!parser_scan_opcode(p))
+			return true;
 	} else if (t.kind == TOKEN_IDENT) {
 		Token u = parser_peek(p);
 		if (u.kind == TOKEN_COMMA) {
@@ -763,51 +788,28 @@ bool parser_scan_next(Parser* p) {
 
 			Token v = parser_curr(p);
 			if (v.kind == TOKEN_DIRECTIVE) {
-				Directive dire = v.data;
-				if (dire == DIRECTIVE_ORG && p->curr_addr != p->start_addr)
-					return parser_msg(p, v, true, "error: ORG can only be at the first line");
+				if (!parser_scan_directive(p))
+					return true;
 
-				parser_consume(p); // directive
-
-				Token w = parser_curr(p);
-				if (w.kind == TOKEN_NUMBER) {
-					u64 value = strconv_from_uint(SS(p->src, w.off, w.off + w.len), 16, NULL);
-					if (value >= 65535)
-						return parser_msg(p, w, true, "error: value exceeds 65535 (or 0FFFF in hex)");
-
-					parser_map_put(p, label, p->curr_addr, value, TOKEN_DIRECTIVE, t);
-				} else {
-					return parser_msg(p, w, true, "error: expected number after directive");
-				}
+				parser_map_put(p, label, p->curr_addr, t);
 			} else if (v.kind == TOKEN_OPCODE) {
-				Opcode opcode = v.data;
-				if (opcode_binary[opcode]) {
-					parser_consume(p); // opcode
+				if (!parser_scan_opcode(p))
+					return true;
 
-					Token w = parser_curr(p);
-					if (w.kind == TOKEN_NUMBER) {
-						u64 addr = strconv_from_uint(SS(p->src, w.off, w.off + w.len), 16, NULL);
-						if (addr >= MEMORY_SIZE)
-							return parser_msg(p, w, true, "error: address out of memory bounds");
-					} else if (w.kind == TOKEN_IDENT) {
-						// no-op
-					} else {
-						return parser_msg(p, w, true, "error: expected address or label");
-					}
-
-					parser_map_put(p, label, p->curr_addr, p->curr_addr, TOKEN_OPCODE, t);
-				}
+				parser_map_put(p, label, p->curr_addr, t);
 			} else {
 				return parser_msg(p, v, true, "error: expected opcode or directive");
 			}
 		} else {
 			return parser_msg(p, u, true, "error: expected a comma after label");
 		}
-
-		parser_consume(p);
 	} else {
 		return parser_msg(p, t, true, "error: expected opcode, directive, or label");
 	}
+
+	t = parser_curr(p);
+	if (t.kind == TOKEN_COMMENT)
+		parser_consume(p);
 
 	t = parser_curr(p);
 	if (t.kind == TOKEN_NEWLINE) {
@@ -818,69 +820,102 @@ bool parser_scan_next(Parser* p) {
 	return parser_msg(p, t, true, "error: expected newline before new statement");
 }
 
-u16 parser_decode_addr(Parser* p, Token t) {
+bool parser_decode_addr(Parser* p, Token t, i16* out) {
 	if (t.kind == TOKEN_NUMBER) {
-		return strconv_from_uint(SS(p->src, t.off, t.off + t.len), 16, NULL);
+		*out = strconv_from_int(SS(p->src, t.off, t.off + t.len), 16, NULL);
+		return true;
 	} else if (t.kind == TOKEN_IDENT) {
 		ParserMapEntry const* e = parser_map_get(p, SS(p->src, t.off, t.off + t.len));
-		return e->addr;
+		if (e == NULL)
+			return false;
+		*out = e->addr;
+		return true;
 	}
-	return 0;
+	return false;
 }
 
-bool parser_assemble_next(Parser* p) {
-	parser_skip_newlines(p);
+bool parser_run_next(Parser* p) {
+	parser_skip(p);
 	if (parser_eof(p))
 		return false;
 
 	Token t = parser_curr(p);
 	parser_consume(p);
 
-	if (t.kind == TOKEN_OPCODE) {
-		Inst inst;
-		inst.opcode = t.data;
-
-		if (opcode_binary[inst.opcode]) {
+	if (t.kind == TOKEN_DIRECTIVE) { // either DEC or HEX
+		Directive dire = t.data;
+		if (dire == DIRECTIVE_ORG) {
+			p->curr_addr -= 1;
+		} else {
 			Token u = parser_curr(p);
-			inst.operand = parser_decode_addr(p, u);
+			i16 value = strconv_from_int(
+				SS(p->src, u.off, u.off + u.len),
+				dire == DIRECTIVE_DEC ? 10 : 16, NULL);
+			p->memory[p->curr_addr] = value;
+		}
+
+		parser_consume(p); // operand
+	} else if (t.kind == TOKEN_OPCODE) {
+		Opcode opcode = t.data;
+		i16 operand = 0;
+
+		if (opcode_binary[opcode]) {
+			Token u = parser_curr(p);
+			if (!parser_decode_addr(p, u, &operand))
+				return parser_msg(p, u, true, "error: referenced label '%.*s' is not defined",
+						  SS(p->src, u.off, u.off + u.len));
 			parser_consume(p); // operand
 		}
 
-		da_append(&p->insts, inst);
-	} else if (t.kind == TOKEN_IDENT) {
+		p->memory[p->curr_addr] = (opcode << 12) | operand;
+	} else { // t.kind == TOKEN_IDENT
 		parser_consume(p); // comma
 
 		Token u = parser_curr(p);
 		parser_consume(p); // operation
 
-		if (u.kind == TOKEN_OPCODE) {
-			Inst inst;
-			inst.opcode = u.data;
-
-			if (opcode_binary[inst.opcode]) {
+		if (u.kind == TOKEN_DIRECTIVE) {
+			Directive dire = u.data;
+			if (dire == DIRECTIVE_ORG) {
+				p->curr_addr -= 1;
+			} else {
 				Token w = parser_curr(p);
-				inst.operand = parser_decode_addr(p, w);
+				i16 value = strconv_from_int(
+					SS(p->src, w.off, w.off + w.len),
+					dire == DIRECTIVE_DEC ? 10 : 16, NULL);
+				p->memory[p->curr_addr] = value;
+			}
+
+			parser_consume(p); // operand
+		} else { // u.kind == TOKEN_OPERAND
+			Opcode opcode = u.data;
+			i16 operand = 0;
+
+			if (opcode_binary[opcode]) {
+				Token w = parser_curr(p);
+				if (!parser_decode_addr(p, w, &operand))
+					return parser_msg(p, w, true, "error: referenced label '%.*s' is not defined",
+							  SS(p->src, w.off, w.off + w.len));
 				parser_consume(p); // operand
 			}
 
-			da_append(&p->insts, inst);
-		} else { // u.kind == TOKEN_DIRECTIVE
-			parser_consume(p); // operand
+			p->memory[p->curr_addr] = (opcode << 12) | operand;
 		}
-	} else { // t.kind == TOKEN_DIRECTIVE
-		parser_consume(p); // operand
 	}
+
+	p->curr_addr += 1;
 
 	return true;
 }
 
-void parser_assemble(Parser* p) {
+void parser_run(Parser* p) {
 	while (parser_scan_next(p))
 		/* no-op */;
 
 	if (!p->has_errors) {
 		p->cursor = 0;
-		while (parser_assemble_next(p))
+		p->curr_addr = p->start_addr;
+		while (parser_run_next(p))
 			/* no-op */;
 	}
 }
@@ -923,28 +958,16 @@ int main(int argc, char** argv) {
 	while (tokenizer_next(&tz))
 		/* no-op */;
 
+	i16 memory[MEMORY_SIZE] = {0};
+
 	Parser p;
-	parser_init(&p, input, input_name, tz.tokens);
-	parser_assemble(&p);
+	parser_init(&p, input, input_name, tz.tokens, memory);
+	parser_run(&p);
 
-	u16 memory[MEMORY_SIZE] = {0};
-
-	for (isize i = 0; i < p.insts.len; ++i) {
-		Inst inst = p.insts.data[i];
-		memory[i + p.start_addr] = inst.opcode << 12;
-		if (opcode_binary[inst.opcode])
-			memory[i + p.start_addr] |= inst.operand;
+	for (isize i = p.start_addr; i < p.start_addr + 20; ++i) {
+		Opcode opcode = (p.memory[i] >> 12) & 0xF;
+		printf("[%03tX] -> %04X (opcode: %s)\n", i, p.memory[i] & 0xFFFF, opcode_names[opcode]);
 	}
-
-	for (isize i = 0; i < p.map_cap; ++i) {
-		if (p.map_hashes[i] != 0) {
-			ParserMapEntry const* e = &p.map_entries[i];
-			if (e->kind == TOKEN_DIRECTIVE)
-				memory[e->addr] = e->value;
-		}
-	}
-
-	// TODO
 
 	parser_free(&p);
 	tokenizer_free(&tz);
