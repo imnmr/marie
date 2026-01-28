@@ -54,15 +54,25 @@ String string_clone     (String s);
 void   string_free      (String* s);
 void   string_resize    (String* s, isize n);
 void   string_copy      (String* dst, String src);
-void   string_copy_n    (String* dst, String src, isize n);
 bool   string_equal     (String a, String b);
-bool   string_equal_n   (String a, String b, isize n);
+bool   string_has_suffix(String s, String suffix);
 isize  string_index_byte(String s, u8 b);
 String string_trim_space(String s);
 String string_to_upper  (String s);
 
+typedef struct StringBuilder {
+	isize len;
+	isize cap;
+	u8*   data;
+} StringBuilder;
+
+String strb_to_string    (StringBuilder* sb);
+char*  strb_to_cstring   (StringBuilder* sb);
+void   strb_write        (StringBuilder* sb, String s);
+void   strb_write_cstring(StringBuilder* sb, char const* s);
+
 u64 strconv_from_uint(String s, isize base, isize* n);
-i64 strconv_from_int(String s, isize base, isize* n);
+i64 strconv_from_int (String s, isize base, isize* n);
 
 bool is_space(u8 c) {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -109,10 +119,6 @@ void string_copy(String* dst, String src) {
 	memmove(dst->data, src.data, src.len);
 }
 
-void string_copy_n(String* dst, String src, isize n) {
-	memmove(dst->data, src.data, n);
-}
-
 bool string_equal(String a, String b) {
 	if (a.len != b.len)
 		return false;
@@ -122,13 +128,9 @@ bool string_equal(String a, String b) {
 	return i == a.len;
 }
 
-bool string_equal_n(String a, String b, isize n) {
-	if (a.len < n || b.len < n)
-		return false;
-	isize i = 0;
-	while (i < n && a.data[i] == b.data[i])
-		i += 1;
-	return i == n;
+bool string_has_suffix(String s, String suffix) {
+	isize off = s.len - suffix.len;
+	return off >= 0 && string_equal(SZ(s, off), suffix);
 }
 
 isize string_index_byte(String s, u8 c) {
@@ -161,6 +163,44 @@ String string_to_upper(String s) {
 			t.data[i] -= 'a' - 'A';
 	}
 	return t;
+}
+
+String strb_to_string(StringBuilder* sb) {
+	String s = { .len = sb->len, .data = sb->data };
+	return s;
+}
+
+char* strb_to_cstring(StringBuilder* sb) {
+	char* s = malloc(sb->len + 1);
+	memmove(s, sb->data, sb->len);
+	s[sb->len] = '\0';
+	return s;
+}
+
+void strb__try_grow(StringBuilder* sb, isize new_len) {
+	if (sb->cap < new_len) {
+		isize new_cap = sb->cap == 0 ? 64 : sb->cap;
+		while (new_cap < new_len)
+			new_cap *= 2;
+		if (new_cap != sb->cap) {
+			sb->cap = new_cap;
+			sb->data = realloc(sb->data, sb->cap);
+			assert(sb->data != NULL);
+		}
+	}
+}
+
+void strb_write(StringBuilder* sb, String s) {
+	strb__try_grow(sb, sb->len + s.len);
+	memmove(&sb->data[sb->len], s.data, s.len);
+	sb->len += s.len;
+}
+
+void strb_write_cstring(StringBuilder* sb, char const* s) {
+	isize len = strlen(s);
+	strb__try_grow(sb, sb->len + len);
+	memmove(&sb->data[sb->len], s, len);
+	sb->len += len;
 }
 
 u64 strconv_from_uint(String s, isize base, isize* n) {
@@ -228,7 +268,7 @@ i64 strconv_from_int(String s, isize base, isize* n) {
 	} while (0)
 
 //
-// MARIE
+// MARIE assembler
 //
 
 #define MEMORY_SIZE 4096
@@ -246,7 +286,7 @@ i64 strconv_from_int(String s, isize base, isize* n) {
 	X_OPCODE(OPCODE_JNS,      "JNS",      0x0, true)  \
 	X_OPCODE(OPCODE_CLEAR,    "CLEAR",    0xA, false) \
 	X_OPCODE(OPCODE_ADDI,     "ADDI",     0xB, true)  \
-	X_OPCODE(OPCODE_JUMPI,    "JUMPI",    0xC, true)  \
+	X_OPCODE(OPCODE_JUMPI,    "JUMPI",    0xC, true)
 
 typedef enum Opcode {
 	OPCODE_INVALID = -1,
@@ -325,7 +365,7 @@ Directive directive_from_string(String s) {
 	X_TOKEN(TOKEN_NUMBER,    "NUMBER")     \
 	X_TOKEN(TOKEN_COMMA,     "COMMA")      \
 	X_TOKEN(TOKEN_NEWLINE,   "NEWLINE")    \
-	X_TOKEN(TOKEN_COMMENT,   "COMMENT")    \
+	X_TOKEN(TOKEN_COMMENT,   "COMMENT")
 
 typedef enum TokenKind {
 #define X_TOKEN(e, _) e,
@@ -505,7 +545,7 @@ typedef struct Parser {
 	String    src_name;
 	TokenList tokens;
 
-	bool has_errors;
+	isize error_count;
 
 	isize cursor;
 	i16   start_addr;
@@ -524,7 +564,7 @@ void parser_init(Parser* p, String src, String src_name, TokenList tokens, i16* 
 	p->src_name = src_name;
 	p->tokens = tokens;
 
-	p->has_errors = false;
+	p->error_count = 0;
 
 	p->cursor = 0;
 	p->start_addr = 0;
@@ -686,7 +726,7 @@ bool parser_msg(Parser* p, Token t, bool error, char const* fmt, ...) {
 	string_free(&cursor);
 
 	if (error) {
-		p->has_errors = true;
+		p->error_count += 1;
 		parser_skip_statement(p);
 	}
 
@@ -908,16 +948,18 @@ bool parser_run_next(Parser* p) {
 	return true;
 }
 
-void parser_run(Parser* p) {
+isize parser_run(Parser* p) {
 	while (parser_scan_next(p))
 		/* no-op */;
 
-	if (!p->has_errors) {
+	if (p->error_count == 0) {
 		p->cursor = 0;
 		p->curr_addr = p->start_addr;
 		while (parser_run_next(p))
 			/* no-op */;
 	}
+
+	return p->error_count;
 }
 
 int main(int argc, char** argv) {
@@ -932,7 +974,9 @@ int main(int argc, char** argv) {
 			if (file == NULL) {
 				fprintf(stderr, "error: failed to open file %s: %s\n",
 					file_name, strerror(errno));
+				return 1;
 			}
+
 			input_name = SL(file_name);
 		}
 
@@ -942,14 +986,15 @@ int main(int argc, char** argv) {
 
 		input.data = malloc(input.len * sizeof(*input.data));
 		isize nread = fread(input.data, sizeof(*input.data), input.len, file);
-		if (nread != input.len) {
-			fprintf(stderr, "error: failed to read input (expected: %td, read: %td)\n",
-				input.len, nread);
-			return 1;
-		}
 
 		if (file != stdin)
 			fclose(file);
+
+		if (nread != input.len) {
+			fprintf(stderr, "error: failed to read input (expected: %zu, read: %zu)\n",
+				input.len, nread);
+			return 1;
+		}
 	}
 
 	Tokenizer tz;
@@ -962,16 +1007,51 @@ int main(int argc, char** argv) {
 
 	Parser p;
 	parser_init(&p, input, input_name, tz.tokens, memory);
-	parser_run(&p);
 
-	for (isize i = p.start_addr; i < p.start_addr + 20; ++i) {
-		Opcode opcode = (p.memory[i] >> 12) & 0xF;
-		printf("[%03tX] -> %04X (opcode: %s)\n", i, p.memory[i] & 0xFFFF, opcode_names[opcode]);
-	}
+	isize errors = parser_run(&p);
 
 	parser_free(&p);
 	tokenizer_free(&tz);
 	string_free(&input);
+
+	if (errors == 0) {
+		StringBuilder sb = {0};
+		if (argc > 2) {
+			strb_write_cstring(&sb, argv[2]);
+		} else if (argc > 1) {
+			isize to = input_name.len;
+			if (string_has_suffix(input_name, S(".mas")))
+				to -= 4;
+			strb_write(&sb, SS(input_name, 0, to));
+			strb_write_cstring(&sb, ".mex");
+		} else {
+			strb_write_cstring(&sb, "out.mex");
+		}
+
+		char* output_name = strb_to_cstring(&sb);
+		FILE* f = fopen(output_name, "wb");
+		if (f == NULL) {
+			fprintf(stderr, "error: failed to open file %s: %s\n",
+				output_name, strerror(errno));
+			free(output_name);
+			return 1;
+		}
+
+		isize nwritten = fwrite(memory, sizeof(*memory), MEMORY_SIZE, f);
+
+		free(output_name);
+		fclose(f);
+
+		if (nwritten != MEMORY_SIZE) {
+			fprintf(stderr, "error: failed to write to file %s: %s (expected: %d, wrote: %zu)\n",
+				output_name, strerror(errno), MEMORY_SIZE, nwritten);
+			return 1;
+		}
+	} else {
+		fprintf(stderr, "error: failed to assemble %.*s, %td error(s) generated\n",
+			SF(input_name), errors);
+		return 1;
+	}
 
 	return 0;
 }
