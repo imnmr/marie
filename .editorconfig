@@ -1,0 +1,9 @@
+root = true
+
+[*]
+line_ending = lf
+insert_final_newline = true
+
+[*.c, *.sh]
+indent_style = tab
+indent_size = 8
